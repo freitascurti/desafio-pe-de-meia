@@ -1,0 +1,115 @@
+# Carregando pacotes necessários
+
+library(PNADcIBGE)
+library(dplyr)
+library(stargazer)
+library(haven)
+library(foreign)
+library(survey)
+library(summarytools)
+library(webshot2)
+library(htmltools)
+library(tidyr)
+library(rlang)
+library(reactable)
+library(ggplot2)
+library(broom)
+library(base)
+
+# Limpando o ambiente
+rm(list=ls(all=TRUE))
+
+################ PNAD TRIMESTRAL 2024#######################################################################
+
+# Importando os dados do 1º e 2º trimestres de 2024
+dados_pnadc_2024_trim1 <- get_pnadc(year = 2024, quarter = 1, design = FALSE)
+dados_pnadc_2024_trim2 <- get_pnadc(year = 2024, quarter = 2, design = FALSE)
+
+# Combinando as bases dos dois trimestres
+publico_alvo_painel <- bind_rows(dados_pnadc_2024_trim1, dados_pnadc_2024_trim2)
+
+# Criando o identificador único do indivíduo e dummies após a junção
+publico_alvo_painel <- publico_alvo_painel %>%
+  mutate(
+    id_individuo = paste0(UPA, "_", V1008, "_", V1014, "_", V2003, "_", V2008, "_", V20081, "_", V20082),
+    faixa_idade_14_24 = ifelse(V2009 >= 14 & V2009 <= 24, 1, 0),
+    ensino_medio_dummie = ifelse(V3003A == "Regular do ensino médio", 1, 0),  # Regular do ensino médio
+    residencia_unipessoal = ifelse(VD2004 == "Unipessoal", 1, 0),             # Unidade doméstica unipessoal
+    rede_publica = ifelse(V3002A == "Rede pública", 1, 0),                    # Rede pública                    # Marcando o trimestre
+  )
+
+# Removendo observações onde V20082 é igual a 9999
+publico_alvo_painel <- publico_alvo_painel %>%
+  filter(V20082 != 9999)
+
+# Filtrando o painel para manter apenas indivíduos que aparecem nos dois trimestres
+publico_alvo_painel_completo <- publico_alvo_painel %>%
+  group_by(id_individuo) %>%
+  filter(n_distinct(Trimestre) == 2) %>%  # Garante que o indivíduo está presente nos dois trimestres
+  ungroup()
+
+# Adicionando a coluna abandono para marcar se o indivíduo estava no ensino médio no 1º trimestre e não está no 2º trimestre
+publico_alvo_painel_completo <- publico_alvo_painel_completo %>%
+  group_by(id_individuo) %>%
+  mutate(
+    abandono = ifelse(
+      any(Trimestre == "2024_1" & V3003A == "Regular do ensino médio") & 
+        any(Trimestre == "2024_2" & V3003A != "Regular do ensino médio"), 
+      1, 
+      0
+    )
+  ) %>%
+  ungroup()
+
+##### Exportando variáveis da PNAD 2023#############################################
+
+# Importando a PNAD anual completa de 2023
+pnadc_anual_2023 <- get_pnadc(year = 2023, interview = "1", design = FALSE)
+
+# Criando o identificador único do indivíduo
+pnadc_anual_2023 <- pnadc_anual_2023 %>%
+  mutate(
+    id_individuo = paste0(UPA, "_", V1008, "_", V1014, "_", V2003, "_", V2008, "_", V20081, "_", V20082)
+  )
+
+# Selecionando as variáveis de interesse: VD5002 (rendimento per capita) e outras relacionadas
+variaveis_interesse <- c("id_individuo", "VD5002", "V2007", "VD2002", "VD3005", "ID_DOMICILIO")
+
+# Selecionando as variáveis de interesse
+pnadc_anual_2023_filtrada <- pnadc_anual_2023 %>%
+  dplyr::select(all_of(variaveis_interesse))
+
+#Selecionar educação da mãe, do pai e max educação mãe/pai
+
+######################################################################################
+
+# Adicionando apenas VD5002 (rendimento per capita) ao público alvo painel completo
+publico_alvo_completo <- publico_alvo_painel_completo %>%
+  inner_join(
+    pnadc_anual_2023_filtrada %>% 
+      dplyr::select(id_individuo, VD5002),
+    by = "id_individuo"
+  )%>%
+  dplyr::select(id_individuo, VD5002, everything())  # Colocando renda_cap logo após id_individuo
+
+
+## Probit abandono
+
+## Beneficiários Pé-de-meia
+
+beneficiários_pdm <- subset( publico_alvo_completo, 
+  (V2009 >= 14 & V2009 <= 24) &                # Faixa etária de 14 a 24 anos
+    V3002 == "Sim" &                           # Vai à escola
+    V3002A == "Rede pública" &                 # Escola pública
+    V3003A == "Regular do ensino médio" &      # Ensino médio regular
+    VD5002 < 706 &                             # Renda per capita menor que 706 reais
+    VD2004 != "Unipessoal"                     # Não é residência unipessoal
+)
+
+
+## Variaveis de interesse
+variaveis_interesse <- c("UPA","V1008","V1014","Ano","Trimestre","UF","Capital","RM_RIDE","V1022","V2005",
+                         
+                         "V2007","V2009","V2010","V3002","V3002A","V3003A","V3010","V3013","VD2002","VD2006","VD2004","VD3004","VD4019",
+                         "VD4048","VD3005","VD4001","VD4002","VD4003","VD4014","VD4009","VD4020","VD4047","V5001A","V5002A","V5003A",
+                         "educ mãe", "educpai", "maxeducmaeepai", "Região"   )
