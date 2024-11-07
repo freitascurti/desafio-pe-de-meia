@@ -1,5 +1,4 @@
 # Carregando pacotes necessários
-
 library(PNADcIBGE)
 library(dplyr)
 library(stargazer)
@@ -15,6 +14,7 @@ library(reactable)
 library(ggplot2)
 library(broom)
 library(base)
+library(MASS)
 
 # Limpando o ambiente
 rm(list=ls(all=TRUE))
@@ -38,18 +38,8 @@ publico_alvo_painel <- publico_alvo_painel %>%
     rede_publica = ifelse(V3002A == "Rede pública", 1, 0),                    # Rede pública                    # Marcando o trimestre
   )
 
-# Removendo observações onde V20082 é igual a 9999
-publico_alvo_painel <- publico_alvo_painel %>%
-  filter(V20082 != 9999)
-
-# Filtrando o painel para manter apenas indivíduos que aparecem nos dois trimestres
-publico_alvo_painel_completo <- publico_alvo_painel %>%
-  group_by(id_individuo) %>%
-  filter(n_distinct(Trimestre) == 2) %>%  # Garante que o indivíduo está presente nos dois trimestres
-  ungroup()
-
 # Adicionando a coluna abandono para marcar se o indivíduo estava no ensino médio no 1º trimestre e não está no 2º trimestre
-publico_alvo_painel_completo <- publico_alvo_painel_completo %>%
+publico_alvo_painel <- publico_alvo_painel %>%
   group_by(id_individuo) %>%
   mutate(
     abandono = ifelse(
@@ -61,7 +51,25 @@ publico_alvo_painel_completo <- publico_alvo_painel_completo %>%
   ) %>%
   ungroup()
 
-##### Exportando variáveis da PNAD 2023#############################################
+# Movendo as variáveis para o começo do dataset
+publico_alvo_painel <- publico_alvo_painel %>%
+  dplyr::select(
+    id_individuo, faixa_idade_14_24, ensino_medio_dummie, residencia_unipessoal, rede_publica, abandono, 
+    everything()
+  )
+
+# Removendo observações onde V20082 é igual a 9999
+publico_alvo_painel <- publico_alvo_painel %>%
+  filter(V20082 != 9999)
+
+# Filtrando o painel para manter apenas indivíduos que aparecem nos dois trimestres
+publico_alvo_painel_completo <- publico_alvo_painel %>%
+  group_by(id_individuo) %>%
+  filter(n_distinct(Trimestre) == 2) %>%  # Garante que o indivíduo está presente nos dois trimestres
+  ungroup()
+
+
+##### Exportando variáveis da PNAD 2023#############################################3
 
 # Importando a PNAD anual completa de 2023
 pnadc_anual_2023 <- get_pnadc(year = 2023, interview = "1", design = FALSE)
@@ -107,9 +115,27 @@ beneficiários_pdm <- subset( publico_alvo_completo,
 )
 
 
-## Variaveis de interesse
-variaveis_interesse <- c("UPA","V1008","V1014","Ano","Trimestre","UF","Capital","RM_RIDE","V1022","V2005",
-                         
-                         "V2007","V2009","V2010","V3002","V3002A","V3003A","V3010","V3013","VD2002","VD2006","VD2004","VD3004","VD4019",
-                         "VD4048","VD3005","VD4001","VD4002","VD4003","VD4014","VD4009","VD4020","VD4047","V5001A","V5002A","V5003A",
-                         "educ mãe", "educpai", "maxeducmaeepai", "Região"   )
+# Filtrando os dados do primeiro trimestre com a variável de abandono
+beneficiarios_pdm_trim1 <- beneficiários_pdm %>%
+  filter(Trimestre == "2024_1" & abandono == 1)
+
+
+
+########## Variáveis de interesse #######################################################
+# Região
+# "educ_mãe", "educ_pai", " max_educ_mae/pai", 
+# "motivo do abandono", 
+# "cursando fora do período ideal"
+#V1022: Situação do domicílio
+#V2001: Número de pessoas no domicílio
+#V2007: Sexo
+#V2009: Idade do morador na data de referência
+#2010: Cor ou raça
+#UF: Unidade da Federação
+#VD2004: Espécie da unidade doméstica
+#VD3004: Nível de instrução mais elevado alcançado
+# VD5002: Rendimento domiciliar per capta
+# V3001: Sabe ler e escrever?
+
+
+write_dta(beneficiários_pdm, "beneficiarios_pdm.dta")
