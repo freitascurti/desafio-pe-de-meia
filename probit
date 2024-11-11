@@ -149,18 +149,26 @@ beneficiários_pdm <- subset(publico_alvo_painel_completo,
 
 ## Tamanho do problema
 
-#Calculando a evasão por série, público geral (14-24,  RDPC < 706, VD2004 != "Unipessoal")
 
-# Filtrar o público geral (14-24 anos, RDPC < 706, VD2004 != "Unipessoal")
+# Filtrar o público potencial (14-24 anos, RDPC < 706, VD2004 != "Unipessoal")
 
-publico_geral <- publico_alvo_painel_completo %>%
+publico_pontencial <- publico_alvo_painel_completo %>%
   filter(  V2009 >= 14 & V2009 <= 24 &       # Faixa etária de 14 a 24 anos
              RDPC < 706 &                      # Renda per capita menor que 706 reais
              VD2004 != "Unipessoal" )         # Não ser residência unipessoal)
 
+# Filtrar publico EM público
 
-# Calcular a evasão por série para o público geral
-evasao_publico_geral <- publico_geral %>%
+em_publico <- publico_alvo_painel_completo %>%
+  filter(
+    V3002A == "Rede pública" &             # Somente escolas da rede pública
+      V2009 >= 14 & V2009 <= 24              # Faixa etária de 14 a 24 anos
+  )
+
+
+# Calcular a evasão por série, público potencial
+
+evasao_publico_potencial <- publico_pontencial %>%
   group_by(V3006) %>%  # Agrupar por série
   summarise(
     evasao_total = sum(evasão, na.rm = TRUE),  # Soma das evasões
@@ -168,8 +176,19 @@ evasao_publico_geral <- publico_geral %>%
     taxa_evasao = evasao_total / total_alunos  # Taxa de evasão
   )
 
+# Calcular a evasão por série, EM público
 
-# Calcular a evasão por série para o público-alvo (beneficiários do PDM)
+evasao_em_publico <- em_publico %>%
+  group_by(V3006) %>%                      # Agrupar por série
+  summarise(
+    evasao_total = sum(evasão, na.rm = TRUE),  # Soma das evasões
+    total_alunos = n(),                        # Total de alunos
+    taxa_evasao = evasao_total / total_alunos  # Taxa de evasão
+  )
+
+
+# Calcular a evasão por série, beneficiários PDM
+
 evasao_publico_alvo <- beneficiários_pdm %>%
   group_by(V3006) %>%  # Agrupar por série
   summarise(
@@ -179,11 +198,9 @@ evasao_publico_alvo <- beneficiários_pdm %>%
   )
 
 
-
 ## Motivos da evasão
 
 # Logit em painel, público geral
-
 
 
 # Logit em painel, efeitos fixos, público geral
@@ -248,5 +265,6 @@ evasoes_todos_periodos <- publico_alvo_painel_completo %>%
 # Verificar o número total de indivíduos que tiveram evasão em qualquer período
 numero_total_de_evasoes <- nrow(evasoes_todos_periodos)
 print(numero_total_de_evasoes)
+
 
 
