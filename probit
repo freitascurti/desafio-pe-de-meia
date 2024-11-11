@@ -1,141 +1,226 @@
+install.packages("plm")
+install.packages("glmnet")
+
+
 # Carregando pacotes necessários
 library(PNADcIBGE)
-library(dplyr)
-library(stargazer)
-library(haven)
-library(foreign)
 library(survey)
-library(summarytools)
-library(webshot2)
-library(htmltools)
-library(tidyr)
-library(rlang)
-library(reactable)
-library(ggplot2)
-library(broom)
-library(base)
-library(MASS)
+library(convey)
+library(tidyverse)
+library(gt)
+library(scales)
+library(dplyr)
+library(haven)
 
-# Limpando o ambiente
 rm(list=ls(all=TRUE))
+gc()
 
-################ PNAD TRIMESTRAL 2024#######################################################################
+## Construindo a base de dados
 
-# Importando os dados do 1º e 2º trimestres de 2024
-dados_pnadc_2024_trim1 <- get_pnadc(year = 2024, quarter = 1, design = FALSE)
-dados_pnadc_2024_trim2 <- get_pnadc(year = 2024, quarter = 2, design = FALSE)
+# Importando os dados dos 4 trimestres de 2023 e adicionando a coluna Trimestre
+dados_pnadc_2023_trim1 <- get_pnadc(year = 2023, quarter = 1, design = FALSE) %>%
+  mutate(Trimestre = 1)
+dados_pnadc_2023_trim2 <- get_pnadc(year = 2023, quarter = 2, design = FALSE) %>%
+  mutate(Trimestre = 2)
+dados_pnadc_2023_trim3 <- get_pnadc(year = 2023, quarter = 3, design = FALSE) %>%
+  mutate(Trimestre = 3)
+dados_pnadc_2023_trim4 <- get_pnadc(year = 2023, quarter = 4, design = FALSE) %>%
+  mutate(Trimestre = 4)
 
-# Combinando as bases dos dois trimestres
-publico_alvo_painel <- bind_rows(dados_pnadc_2024_trim1, dados_pnadc_2024_trim2)
+# Combinando as bases dos quatro trimestres
+publico_alvo_painel1 <- bind_rows(
+  dados_pnadc_2023_trim1, 
+  dados_pnadc_2023_trim2, 
+  dados_pnadc_2023_trim3, 
+  dados_pnadc_2023_trim4
+)
 
-# Criando o identificador único do indivíduo e dummies após a junção
+## Criando as dummies necessárias
+
+# Parte 1: Calcular a Renda Domiciliar Per Capita (RDPC)
+rdpc_data <- publico_alvo_painel1 %>%
+  group_by(ID_DOMICILIO) %>%
+  summarise(
+    V2001R = sum(VD2003, na.rm = TRUE),        # Número de componentes do domicílio
+    VD4016R = sum(VD4016, na.rm = TRUE),       # Total do rendimento habitual no domicílio
+    VD4017R = sum(VD4017, na.rm = TRUE),       # Total do rendimento efetivo no domicílio
+    VD4047R = sum(VD4019, na.rm = TRUE)        # Rendimento mensal habitual de todos os trabalhos
+  ) %>%
+  mutate(
+    RD = VD4016R + VD4017R + VD4047R,          # Rendimento domiciliar total
+    RDPC = RD / V2001R                         # Renda domiciliar per capita
+  ) %>%
+  ungroup()
+
+# Parte 2: Combinar RDPC com o DataFrame original
+publico_alvo_painel <- publico_alvo_painel1 %>%
+  left_join(rdpc_data, by = "ID_DOMICILIO")
+
+# Parte 3: Adicionar as Dummies
 publico_alvo_painel <- publico_alvo_painel %>%
   mutate(
     id_individuo = paste0(UPA, "_", V1008, "_", V1014, "_", V2003, "_", V2008, "_", V20081, "_", V20082),
     faixa_idade_14_24 = ifelse(V2009 >= 14 & V2009 <= 24, 1, 0),
     ensino_medio_dummie = ifelse(V3003A == "Regular do ensino médio", 1, 0),  # Regular do ensino médio
     residencia_unipessoal = ifelse(VD2004 == "Unipessoal", 1, 0),             # Unidade doméstica unipessoal
-    rede_publica = ifelse(V3002A == "Rede pública", 1, 0),                    # Rede pública                    # Marcando o trimestre
+    rede_publica = ifelse(V3002A == "Rede pública", 1, 0),                    # Rede pública
+    renda_per_capta_menor_706 = ifelse(RDPC < 706, 1, 0)                      # Renda domiciliar per capita menor que 706
   )
 
-# Adicionando a coluna abandono para marcar se o indivíduo estava no ensino médio no 1º trimestre e não está no 2º trimestre
+
+# Adicionando a coluna evasão com lógica simplificada
 publico_alvo_painel <- publico_alvo_painel %>%
   group_by(id_individuo) %>%
   mutate(
-    abandono = ifelse(
-      any(Trimestre == "2024_1" & V3003A == "Regular do ensino médio") & 
-        any(Trimestre == "2024_2" & V3003A != "Regular do ensino médio"), 
-      1, 
-      0
+    evasão = ifelse(
+      (Trimestre == "2023_1" & V3003A == "Regular do ensino médio" & 
+         !any(Trimestre == "2023_2" & V3003A == "Regular do ensino médio")) |
+        (Trimestre == "2023_2" & V3003A == "Regular do ensino médio" & 
+           !any(Trimestre == "2023_3" & V3003A == "Regular do ensino médio")) |
+        (Trimestre == "2023_3" & V3003A == "Regular do ensino médio" & 
+           !any(Trimestre == "2023_4" & V3003A == "Regular do ensino médio")),
+      1,  # Marcado como evasão
+      0   # Não houve evasão
     )
   ) %>%
   ungroup()
 
-# Movendo as variáveis para o começo do dataset
-publico_alvo_painel <- publico_alvo_painel %>%
+# Filtrando o painel para manter apenas indivíduos que aparecem nos quatro trimestres
+publico_alvo_painel_completo <- publico_alvo_painel %>%
+  group_by(id_individuo) %>%
+  filter(n_distinct(Trimestre) == 4) %>%  # Garante que o indivíduo está presente nos quatro trimestres
+  ungroup()
+
+# Removendo observações onde V20082 é igual a 9999
+publico_alvo_painel_completo <- publico_alvo_painel_completo %>%
+  filter(V20082 != 9999)
+
+# Adicionando a coluna de região
+publico_alvo_painel_completo <- publico_alvo_painel_completo %>%
+  mutate(
+    região = case_when(
+      substr(UPA, start = 1, stop = 1) == '1' ~ 'Norte',
+      substr(UPA, start = 1, stop = 1) == '2' ~ 'Nordeste',
+      substr(UPA, start = 1, stop = 1) == '3' ~ 'Sudeste',
+      substr(UPA, start = 1, stop = 1) == '4' ~ 'Sul',
+      substr(UPA, start = 1, stop = 1) == '5' ~ 'Centro-Oeste',
+      TRUE ~ NA_character_  # Para casos onde o código não corresponde a uma região
+    )
+  )
+
+# Adicionando as colunas de educacao_mae e educacao_pai
+publico_alvo_painel_completo <- publico_alvo_painel_completo %>%
+  group_by(ID_DOMICILIO) %>%
+  mutate(
+    # Identificar a mãe
+    is_mae = (as.numeric(V2007) == 2 & (as.numeric(VD2002) %in% c(1, 2, 6))),
+    educacao_mae = ifelse(any(is_mae), V3009A[is_mae][1], NA),
+    
+    # Identificar o pai
+    is_pai = (as.numeric(V2007) == 1 & (as.numeric(VD2002) %in% c(1, 2, 6))),
+    educacao_pai = ifelse(any(is_pai), V3009A[is_pai][1], NA)
+  ) %>%
+  # Remover as colunas auxiliares e desagrupar
+  select(-is_mae, -is_pai) %>%
+  ungroup()
+
+# Reorganizando as colunas para trazer as novas variáveis para o começo
+publico_alvo_painel_completo <- publico_alvo_painel_completo %>%
   dplyr::select(
-    id_individuo, faixa_idade_14_24, ensino_medio_dummie, residencia_unipessoal, rede_publica, abandono, 
+    id_individuo, faixa_idade_14_24, ensino_medio_dummie, residencia_unipessoal, 
+    rede_publica, evasão, renda_per_capta_menor_706, RDPC, região, educacao_mae, educacao_pai, 
     everything()
   )
 
-# Removendo observações onde V20082 é igual a 9999
-publico_alvo_painel <- publico_alvo_painel %>%
-  filter(V20082 != 9999)
-
-# Filtrando o painel para manter apenas indivíduos que aparecem nos dois trimestres
-publico_alvo_painel_completo <- publico_alvo_painel %>%
-  group_by(id_individuo) %>%
-  filter(n_distinct(Trimestre) == 2) %>%  # Garante que o indivíduo está presente nos dois trimestres
-  ungroup()
-
-
-##### Exportando variáveis da PNAD 2023#############################################3
-
-# Importando a PNAD anual completa de 2023
-pnadc_anual_2023 <- get_pnadc(year = 2023, interview = "1", design = FALSE)
-
-# Criando o identificador único do indivíduo
-pnadc_anual_2023 <- pnadc_anual_2023 %>%
-  mutate(
-    id_individuo = paste0(UPA, "_", V1008, "_", V1014, "_", V2003, "_", V2008, "_", V20081, "_", V20082)
-  )
-
-# Selecionando as variáveis de interesse: VD5002 (rendimento per capita) e outras relacionadas
-variaveis_interesse <- c("id_individuo", "VD5002", "V2007", "VD2002", "VD3005", "ID_DOMICILIO")
-
-# Selecionando as variáveis de interesse
-pnadc_anual_2023_filtrada <- pnadc_anual_2023 %>%
-  dplyr::select(all_of(variaveis_interesse))
-
-#Selecionar educação da mãe, do pai e max educação mãe/pai
-
-######################################################################################
-
-# Adicionando apenas VD5002 (rendimento per capita) ao público alvo painel completo
-publico_alvo_completo <- publico_alvo_painel_completo %>%
-  inner_join(
-    pnadc_anual_2023_filtrada %>% 
-      dplyr::select(id_individuo, VD5002),
-    by = "id_individuo"
-  )%>%
-  dplyr::select(id_individuo, VD5002, everything())  # Colocando renda_cap logo após id_individuo
-
-
-## Probit abandono
-
-## Beneficiários Pé-de-meia
-
-beneficiários_pdm <- subset( publico_alvo_completo, 
-  (V2009 >= 14 & V2009 <= 24) &                # Faixa etária de 14 a 24 anos
-    V3002 == "Sim" &                           # Vai à escola
-    V3002A == "Rede pública" &                 # Escola pública
-    V3003A == "Regular do ensino médio" &      # Ensino médio regular
-    VD5002 < 706 &                             # Renda per capita menor que 706 reais
-    VD2004 != "Unipessoal"                     # Não é residência unipessoal
+# Filtrando para beneficiar os indivíduos de interesse
+beneficiários_pdm <- subset(publico_alvo_painel_completo,
+                            (V2009 >= 14 & V2009 <= 24) &                # Faixa etária de 14 a 24 anos
+                              V3002A == "Rede pública" &                   # Escola pública
+                              V3003A == "Regular do ensino médio" &        # Ensino médio regular
+                              RDPC < 706 &                                 # Renda per capita menor que 706 reais
+                              VD2004 != "Unipessoal"                       # Não é residência unipessoal
 )
 
+## Tamanho do problema
 
-# Filtrando os dados do primeiro trimestre com a variável de abandono
-beneficiarios_pdm_trim1 <- beneficiários_pdm %>%
-  filter(Trimestre == "2024_1" & abandono == 1)
+#Calculando a evasão por série, público geral (14-24, Regular do EM )
+
+# Filtrar o público geral (14-24 anos, ensino médio regular)
+publico_geral <- publico_alvo_painel_completo %>%
+  filter(V2009 >= 14 & V2009 <= 24 & V3003A == "Regular do ensino médio")
+
+# Calcular a evasão por série para o público geral
+evasao_publico_geral <- publico_geral %>%
+  group_by(V3006) %>%  # Agrupar por série
+  summarise(
+    evasao_total = sum(evasão, na.rm = TRUE),  # Soma das evasões
+    total_alunos = n(),                        # Total de alunos
+    taxa_evasao = evasao_total / total_alunos  # Taxa de evasão
+  )
+
+
+# Calcular a evasão por série para o público-alvo (beneficiários do PDM)
+evasao_publico_alvo <- beneficiários_pdm %>%
+  group_by(V3006) %>%  # Agrupar por série
+  summarise(
+    evasao_total = sum(evasão, na.rm = TRUE),  # Soma das evasões
+    total_alunos = n(),                        # Total de alunos
+    taxa_evasao = evasao_total / total_alunos  # Taxa de evasão
+  )
+
+
+## Motivos da evasão
+
+# Logit em painel, público geral
 
 
 
-########## Variáveis de interesse #######################################################
-# Região
-# "educ_mãe", "educ_pai", " max_educ_mae/pai", 
-# "motivo do abandono", 
-# "cursando fora do período ideal"
+# Logit em painel, efeitos fixos, público geral
+
+
+# Logit em painel, público alvo
+
+
+
+# Logit em painel, efeitos fixos, público geral
+
+########## Variáveis de interesse ###########################################################################
+
+
+# região
+# educacao_mae , educacao_pai 
 #V1022: Situação do domicílio
 #V2001: Número de pessoas no domicílio
 #V2007: Sexo
 #V2009: Idade do morador na data de referência
 #2010: Cor ou raça
-#UF: Unidade da Federação
 #VD2004: Espécie da unidade doméstica
 #VD3004: Nível de instrução mais elevado alcançado
-# VD5002: Rendimento domiciliar per capta
+# RDPC : Rendimento domiciliar per capta
 # V3001: Sabe ler e escrever?
+# Criar uma subamostra aleatória com 1/4 das observações
+
+subamostra <- publico_alvo_painel_completo %>%
+  sample_frac(size = 0.1)
+
+write_dta(subamostra,"subamostra2.dta")
+
+### Número evasão
+
+evasao_primeiro_para_segundo <- publico_alvo_painel_completo %>%
+  group_by(id_individuo) %>%
+  summarise(
+    matriculado_1 = any(Trimestre == 1 & V3003A == "Regular do ensino médio"),
+    nao_matriculado_2 = any(Trimestre == 2 & V3003A != "Regular do ensino médio")
+  ) %>%
+  filter(matriculado_1 & nao_matriculado_2) %>%
+  ungroup()
+
+# Verificar o número de indivíduos que atenderam a condição
+numero_de_evasoes <- nrow(evasao_primeiro_para_segundo)
+print(numero_de_evasoes)
 
 
-write_dta(beneficiários_pdm, "beneficiarios_pdm.dta")
+### Resolver educ mãe e pai
+### Aumentar o painel - Critério de formatura e só retirar variáveis oportunas
+### 
