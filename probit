@@ -1,5 +1,3 @@
-install.packages("plm")
-install.packages("glmnet")
 
 
 # Carregando pacotes necessários
@@ -73,18 +71,18 @@ publico_alvo_filtrado <- publico_alvo_filtrado %>%
     evasão = ifelse(
       # Condição 1: Se o indivíduo estava matriculado no 1º trimestre de 2023,
       # mas não aparece matriculado no 2º trimestre de 2023.
-      (Trimestre == "2023_1" & V3003A == "Regular do ensino médio" & 
-         !any(Trimestre == "2023_2" & V3003A == "Regular do ensino médio")) |
+      (Trimestre == "1" & V3003A == "Regular do ensino médio" & 
+         !any(Trimestre == "2" & V3003A == "Regular do ensino médio")) |
         
         # Condição 2: Se o indivíduo estava matriculado no 2º trimestre de 2023,
         # mas não aparece matriculado no 3º trimestre de 2023.
-        (Trimestre == "2023_2" & V3003A == "Regular do ensino médio" & 
-           !any(Trimestre == "2023_3" & V3003A == "Regular do ensino médio")) |
+        (Trimestre == "2" & V3003A == "Regular do ensino médio" & 
+           !any(Trimestre == "3" & V3003A == "Regular do ensino médio")) |
         
         # Condição 3: Se o indivíduo estava matriculado no 3º trimestre de 2023,
         # mas não aparece matriculado no 4º trimestre de 2023.
-        (Trimestre == "2023_3" & V3003A == "Regular do ensino médio" & 
-           !any(Trimestre == "2023_4" & V3003A == "Regular do ensino médio")) |
+        (Trimestre == "3" & V3003A == "Regular do ensino médio" & 
+           !any(Trimestre == "4" & V3003A == "Regular do ensino médio")) |
         1,  # Se alguma das condições acima for verdadeira, marcamos evasão como 1.
       0   # Caso contrário, marcamos evasão como 0.
     )
@@ -239,7 +237,6 @@ evasao_publico_alvo <- beneficiários_pdm %>%
 # V3001: Sabe ler e escrever?
 
 
-
 ################################### Número evasão###########################################################
 
 # Verificar evasões em todas as transições de trimestre
@@ -247,16 +244,16 @@ evasoes_todos_periodos <- publico_alvo_painel_completo %>%
   group_by(id_individuo) %>%
   summarise(
     # Verificar matrícula no 1º trimestre e ausência no 2º trimestre
-    evasao_1_para_2 = any(Trimestre == "2023_1" & V3003A == "Regular do ensino médio") & 
-      !any(Trimestre == "2023_2" & V3003A == "Regular do ensino médio"),
+    evasao_1_para_2 = any(Trimestre == "1" & V3003A == "Regular do ensino médio") & 
+      !any(Trimestre == "2" & V3003A == "Regular do ensino médio"),
     
     # Verificar matrícula no 2º trimestre e ausência no 3º trimestre
-    evasao_2_para_3 = any(Trimestre == "2023_2" & V3003A == "Regular do ensino médio") & 
-      !any(Trimestre == "2023_3" & V3003A == "Regular do ensino médio"),
+    evasao_2_para_3 = any(Trimestre == "2" & V3003A == "Regular do ensino médio") & 
+      !any(Trimestre == "3" & V3003A == "Regular do ensino médio"),
     
     # Verificar matrícula no 3º trimestre e ausência no 4º trimestre
-    evasao_3_para_4 = any(Trimestre == "2023_3" & V3003A == "Regular do ensino médio") & 
-      !any(Trimestre == "2023_4" & V3003A == "Regular do ensino médio")
+    evasao_3_para_4 = any(Trimestre == "3" & V3003A == "Regular do ensino médio") & 
+      !any(Trimestre == "4" & V3003A == "Regular do ensino médio")
   ) %>%
   # Filtrar indivíduos que tiveram evasão em qualquer um dos períodos
   filter(evasao_1_para_2 | evasao_2_para_3 | evasao_3_para_4) %>%
