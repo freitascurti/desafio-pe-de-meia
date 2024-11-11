@@ -1,6 +1,3 @@
-install.packages("plm")
-install.packages("glmnet")
-
 
 # Carregando pacotes necessários
 library(PNADcIBGE)
@@ -17,28 +14,24 @@ gc()
 
 ## Construindo a base de dados
 
-# Importando os dados dos 4 trimestres de 2023 e adicionando a coluna Trimestre
-dados_pnadc_2023_trim1 <- get_pnadc(year = 2023, quarter = 1, design = FALSE) %>%
-  mutate(Trimestre = 1)
-dados_pnadc_2023_trim2 <- get_pnadc(year = 2023, quarter = 2, design = FALSE) %>%
-  mutate(Trimestre = 2)
-dados_pnadc_2023_trim3 <- get_pnadc(year = 2023, quarter = 3, design = FALSE) %>%
-  mutate(Trimestre = 3)
-dados_pnadc_2023_trim4 <- get_pnadc(year = 2023, quarter = 4, design = FALSE) %>%
-  mutate(Trimestre = 4)
+publico_alvo_painel <- readRDS("publico_alvo_painel.rds")
 
-# Combinando as bases dos quatro trimestres
-publico_alvo_painel1 <- bind_rows(
-  dados_pnadc_2023_trim1, 
-  dados_pnadc_2023_trim2, 
-  dados_pnadc_2023_trim3, 
-  dados_pnadc_2023_trim4
-)
+# Filtrando as variáveis necessárias
+
+variaveis_interesse <- c(
+  "UPA", "V1008", "V1014", "V2003", "V2008", "V20081", "V20082", "V2009",
+  "V3003A", "VD2004", "V3002A", "ID_DOMICILIO", "V2001", "VD4016",
+  "VD4017", "Trimestre", "VD2003", "VD4019", "V2007", "V3009A","VD2002", "V3006")
+
+
+# Filtrar a base de dados
+publico_alvo_filtrado <- publico_alvo_painel %>%
+  select(all_of(variaveis_interesse))
 
 ## Criando as dummies necessárias
 
 # Parte 1: Calcular a Renda Domiciliar Per Capita (RDPC)
-rdpc_data <- publico_alvo_painel1 %>%
+rdpc_data <- publico_alvo_filtrado %>%
   group_by(ID_DOMICILIO) %>%
   summarise(
     V2001R = sum(VD2003, na.rm = TRUE),        # Número de componentes do domicílio
@@ -52,12 +45,13 @@ rdpc_data <- publico_alvo_painel1 %>%
   ) %>%
   ungroup()
 
+
 # Parte 2: Combinar RDPC com o DataFrame original
-publico_alvo_painel <- publico_alvo_painel1 %>%
+publico_alvo_filtrado <- publico_alvo_filtrado %>%
   left_join(rdpc_data, by = "ID_DOMICILIO")
 
 # Parte 3: Adicionar as Dummies
-publico_alvo_painel <- publico_alvo_painel %>%
+publico_alvo_filtrado <- publico_alvo_filtrado %>%
   mutate(
     id_individuo = paste0(UPA, "_", V1008, "_", V1014, "_", V2003, "_", V2008, "_", V20081, "_", V20082),
     faixa_idade_14_24 = ifelse(V2009 >= 14 & V2009 <= 24, 1, 0),
@@ -69,7 +63,8 @@ publico_alvo_painel <- publico_alvo_painel %>%
 
 
 # Adicionando a coluna evasão com lógica simplificada
-publico_alvo_painel <- publico_alvo_painel %>%
+
+publico_alvo_filtrado <- publico_alvo_filtrado %>%
   group_by(id_individuo) %>%
   mutate(
     evasão = ifelse(
@@ -86,13 +81,13 @@ publico_alvo_painel <- publico_alvo_painel %>%
   ungroup()
 
 # Filtrando o painel para manter apenas indivíduos que aparecem nos quatro trimestres
-publico_alvo_painel_completo <- publico_alvo_painel %>%
+publico_alvo_filtrado<- publico_alvo_filtrado %>%
   group_by(id_individuo) %>%
   filter(n_distinct(Trimestre) == 4) %>%  # Garante que o indivíduo está presente nos quatro trimestres
   ungroup()
 
 # Removendo observações onde V20082 é igual a 9999
-publico_alvo_painel_completo <- publico_alvo_painel_completo %>%
+publico_alvo_painel_completo <- publico_alvo_filtrado %>%
   filter(V20082 != 9999)
 
 # Adicionando a coluna de região
@@ -143,11 +138,15 @@ beneficiários_pdm <- subset(publico_alvo_painel_completo,
 
 ## Tamanho do problema
 
-#Calculando a evasão por série, público geral (14-24, Regular do EM )
+#Calculando a evasão por série, público geral (14-24,  RDPC < 706, VD2004 != "Unipessoal")
 
-# Filtrar o público geral (14-24 anos, ensino médio regular)
+# Filtrar o público geral (14-24 anos, RDPC < 706, VD2004 != "Unipessoal")
+
 publico_geral <- publico_alvo_painel_completo %>%
-  filter(V2009 >= 14 & V2009 <= 24 & V3003A == "Regular do ensino médio")
+  filter(  V2009 >= 14 & V2009 <= 24 &       # Faixa etária de 14 a 24 anos
+             RDPC < 706 &                      # Renda per capita menor que 706 reais
+             VD2004 != "Unipessoal" )         # Não ser residência unipessoal)
+
 
 # Calcular a evasão por série para o público geral
 evasao_publico_geral <- publico_geral %>%
@@ -169,6 +168,8 @@ evasao_publico_alvo <- beneficiários_pdm %>%
   )
 
 
+
+
 ## Motivos da evasão
 
 # Logit em painel, público geral
@@ -181,29 +182,41 @@ evasao_publico_alvo <- beneficiários_pdm %>%
 # Logit em painel, público alvo
 
 
-
 # Logit em painel, efeitos fixos, público geral
+
+
 
 ########## Variáveis de interesse ###########################################################################
 
 
 # região
+
 # educacao_mae , educacao_pai 
+
 #V1022: Situação do domicílio
+
 #V2001: Número de pessoas no domicílio
+
 #V2007: Sexo
+
 #V2009: Idade do morador na data de referência
+
 #2010: Cor ou raça
+
 #VD2004: Espécie da unidade doméstica
+
 #VD3004: Nível de instrução mais elevado alcançado
+
 # RDPC : Rendimento domiciliar per capta
+
 # V3001: Sabe ler e escrever?
-# Criar uma subamostra aleatória com 1/4 das observações
+
 
 subamostra <- publico_alvo_painel_completo %>%
   sample_frac(size = 0.1)
 
 write_dta(subamostra,"subamostra2.dta")
+
 
 ### Número evasão
 
