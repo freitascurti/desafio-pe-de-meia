@@ -2,10 +2,11 @@ install.packages("plm")
 install.packages("glmnet")
 install.packages("fixest")
 install.packages("plm")
+install.packages("janitor")
+
 
 # Carregando pacotes necessários
 library(PNADcIBGE)
-library(survey)
 library(convey)
 library(tidyverse)
 library(gt)
@@ -15,166 +16,205 @@ library(haven)
 library(fixest)
 library(lme4)
 library(plm)
+library(janitor)
 
 # Limpando o ambiente
 rm(list=ls(all=TRUE))
 gc()
 
+
 ####################################### Construindo a base de dados##############################################
 
-publico_alvo_painel <- readRDS("publico_alvo_painel.rds")
 
 # Filtrando as variáveis necessárias
 
 variaveis_interesse <- c(
   "UPA", "V1008", "V1014", "V2003", "V2008", "V20081", "V20082", "V2009",
   "V3003A", "VD2004", "V3002A", "ID_DOMICILIO", "V2001", "VD4016",
-  "VD4017", "Trimestre", "VD2003", "VD4019", "V2007", "V3009A","VD2002", "V3006","VD3005", "V2010")
+  "VD4017", "VD2003", "VD4019", "V2007", "V3009A","VD2002", "V3006","VD3005", "V2010", "VD4020","V3002", "Ano", "Trimestre")
 
 
-# Filtrar a base de dados
-publico_alvo_filtrado <- publico_alvo_painel %>%
-  select(all_of(variaveis_interesse))
+####################################### Criando base evasão ###################################################
 
-##################################### Criando variáveis##########################################################
+# Carregar a base base_evasão
+base_evasão <- readRDS("base_evasão")
 
-##  RDPC
-# Parte1 : Calcular a Renda Domiciliar Per Capita (RDPC)
-rdpc_data <- publico_alvo_filtrado %>%
-  group_by(ID_DOMICILIO) %>%
-  summarise(
-    V2001R = sum(VD2003, na.rm = TRUE),        # Número de componentes do domicílio
-    VD4016R = sum(VD4016, na.rm = TRUE),       # Total do rendimento habitual no domicílio
-    VD4017R = sum(VD4017, na.rm = TRUE),       # Total do rendimento efetivo no domicílio
-    VD4047R = sum(VD4019, na.rm = TRUE)        # Rendimento mensal habitual de todos os trabalhos
-  ) %>%
+# Filtrando a base para as variáveis de interesse
+base_evasão<- base_evasão[, variaveis_interesse]
+
+
+
+# Adicionar as novas colunas na base base_evasão
+base_evasão <- base_evasão %>%
+  # Criar a coluna id_individuo
   mutate(
-    RD = VD4016R + VD4017R + VD4047R,          # Rendimento domiciliar total
-    RDPC = RD / V2001R                         # Renda domiciliar per capita
+    id_individuo = paste0(UPA, "_", V1008, "_", V1014, "_", V2003, "_", V2008, "_", V20081, "_", V20082)
   ) %>%
-  ungroup()
-
-
-# Parte 2: Combinar RDPC com o DataFrame original
-publico_alvo_filtrado <- publico_alvo_filtrado %>%
-  left_join(rdpc_data, by = "ID_DOMICILIO")
-
-# Parte 3: Adicionar as Dummies
-publico_alvo_filtrado <- publico_alvo_filtrado %>%
+  # Organizar a base pelos identificadores e trimestres
+  arrange(id_individuo, Ano, Trimestre) %>%
+  # Adicionar as outras colunas e variáveis necessárias
   mutate(
-    id_individuo = paste0(UPA, "_", V1008, "_", V1014, "_", V2003, "_", V2008, "_", V20081, "_", V20082),
     faixa_idade_14_24 = ifelse(V2009 >= 14 & V2009 <= 24, 1, 0),
-    ensino_medio_dummie = ifelse(V3003A == "Regular do ensino médio", 1, 0),  # Regular do ensino médio
-    residencia_unipessoal = ifelse(VD2004 == "Unipessoal", 1, 0),             # Unidade doméstica unipessoal
-    rede_publica = ifelse(V3002A == "Rede pública", 1, 0),                    # Rede pública
-    renda_per_capta_menor_706 = ifelse(RDPC < 706, 1, 0)                      # Renda domiciliar per capita menor que 706
-  )
-
-
-## EVASÃO
-
-publico_alvo_filtrado <- publico_alvo_filtrado %>%
-  group_by(id_individuo) %>%
-  mutate(
-    evasão = ifelse(
-      # Condição 1: Se o indivíduo estava matriculado no 1º trimestre de 2023,
-      # mas não aparece matriculado no 2º trimestre de 2023.
-      ((Trimestre == "1" & V3003A == "Regular do ensino médio") & 
-         !any(Trimestre == "2" & V3003A == "Regular do ensino médio")) |
-        
-        # Condição 2: Se o indivíduo estava matriculado no 2º trimestre de 2023,
-        # mas não aparece matriculado no 3º trimestre de 2023.
-        ((Trimestre == "2" & V3003A == "Regular do ensino médio") & 
-           !any(Trimestre == "3" & V3003A == "Regular do ensino médio")) |
-        
-        # Condição 3: Se o indivíduo estava matriculado no 3º trimestre de 2023,
-        # mas não aparece matriculado no 4º trimestre de 2023.
-        ((Trimestre == "3" & V3003A == "Regular do ensino médio") & 
-           !any(Trimestre == "4" & V3003A == "Regular do ensino médio")),
-        1,  # Se alguma das condições acima for verdadeira, marcamos evasão como 1.
-      0   # Caso contrário, marcamos evasão como 0.
-    )
-  ) %>%
-  ungroup()
-        
-## Filtrando o painel para manter apenas indivíduos que aparecem nos quatro trimestres
-
-publico_alvo_filtrado <- publico_alvo_filtrado %>%
-  group_by(id_individuo) %>%
-  filter(n_distinct(Trimestre) == 4) %>%  # Garante que o indivíduo está presente nos quatro trimestres
-  ungroup()
-
-## Removendo observações onde V20082 é igual a 9999
-publico_alvo_painel_completo <- publico_alvo_filtrado %>%
-  filter(V20082 != 9999)
-
-## Adicionando a coluna de região
-publico_alvo_painel_completo <- publico_alvo_painel_completo %>%
-  mutate(
+    ensino_medio_dummie = ifelse(V3003A == "Regular do ensino médio", 1, 0),
+    residencia_unipessoal = ifelse(VD2004 == "Unipessoal", 1, 0),
+    rede_publica = ifelse(V3002A == "Rede pública", 1, 0),
+    
+    # Calcular RDPC (Renda Domiciliar Per Capita)
+    RD = sum(VD4020, na.rm = TRUE),          # Rendimento domiciliar total
+    V2001R = ifelse(!is.na(V2001), V2001[1], NA),  # Número de residentes no domicílio
+    RDPC = RD / V2001R,                      # Renda domiciliar per capita
+    
+    # Criar a dummy para renda per capita menor que 706
+    renda_per_capta_menor_706 = ifelse(RDPC < 706, 1, 0),
+    
+    # Adicionar a coluna de região
     região = case_when(
       substr(UPA, start = 1, stop = 1) == '1' ~ 'Norte',
       substr(UPA, start = 1, stop = 1) == '2' ~ 'Nordeste',
       substr(UPA, start = 1, stop = 1) == '3' ~ 'Sudeste',
       substr(UPA, start = 1, stop = 1) == '4' ~ 'Sul',
       substr(UPA, start = 1, stop = 1) == '5' ~ 'Centro-Oeste',
-      TRUE ~ NA_character_  # Para casos onde o código não corresponde a uma região
-    )
-  )
-
-## Adicionando as colunas de educacao_mae e educacao_pai
-publico_alvo_painel_completo <- publico_alvo_painel_completo %>%
-  group_by(ID_DOMICILIO) %>%
-  mutate(
-    # Identificar a mãe
+      TRUE ~ NA_character_
+    ),
+    
+    # Identificar a educação da mãe e do pai
     is_mae = (as.numeric(V2007) == 2 & (as.numeric(VD2002) %in% c(1, 2, 6))),
     educacao_mae = ifelse(any(is_mae), VD3005[is_mae][1], NA),
-    
-    # Identificar o pai
     is_pai = (as.numeric(V2007) == 1 & (as.numeric(VD2002) %in% c(1, 2, 6))),
-    educacao_pai = ifelse(any(is_pai), VD3005[is_pai][1], NA)
+    educacao_pai = ifelse(any(is_pai), VD3005[is_pai][1], NA),
+    
+    # Criar a dummie de abandono: frequentando no trimestre anterior e não frequentando no trimestre atual
+    evasão = ifelse(
+      lag(V3002) == "Sim" & V3002 == "Não" & lag(Ano) == Ano,
+      1,
+      0
+    )
   ) %>%
-  # Remover as colunas auxiliares e desagrupar
-  select(-is_mae, -is_pai) %>%
+  # Remover as colunas auxiliares usadas para identificar pais e mães
+  select(-is_mae, -is_pai)
+
+
+# Filtrar os indivíduos que responderam tanto no T1 do ano T quanto no T1 do ano T+1
+base_evasão_filtrada <- base_evasão %>%
+  group_by(id_individuo) %>%
+  filter(
+    any(Ano == 2022 & Trimestre == 1) & any(Ano == 2023 & Trimestre == 1) |
+      any(Ano == 2023 & Trimestre == 1) & any(Ano == 2024 & Trimestre == 1)
+  ) %>%
   ungroup()
 
-## Reorganizando as colunas para trazer as novas variáveis para o começo
-publico_alvo_painel_completo <- publico_alvo_painel_completo %>%
-  dplyr::select(
-    id_individuo, faixa_idade_14_24, ensino_medio_dummie, residencia_unipessoal, 
-    rede_publica, evasão, renda_per_capta_menor_706, RDPC, região, educacao_mae, educacao_pai, 
+# Reorganizando as colunas para trazer as novas variáveis para o começo
+base_evasão_filtrada <- base_evasão_filtrada %>%
+  dplyr::select( 
+    id_individuo,Ano, Trimestre, faixa_idade_14_24, ensino_medio_dummie, residencia_unipessoal,
+    rede_publica, renda_per_capta_menor_706, RDPC, região, educacao_mae, educacao_pai, evasão,
     everything()
   )
 
-## Filtrando para beneficiar os indivíduos de interesse
-beneficiários_pdm <- subset(publico_alvo_painel_completo,
-                            (V2009 >= 14 & V2009 <= 24) &                # Faixa etária de 14 a 24 anos
-                              V3002A == "Rede pública" &                   # Escola pública
-                              V3003A == "Regular do ensino médio" &        # Ensino médio regular
-                              RDPC < 706 &                                 # Renda per capita menor que 706 reais
-                              VD2004 != "Unipessoal"                       # Não é residência unipessoal
-)
+## Removendo observações onde V20082 é igual a 9999
+base_evasão_filtrada <- base_evasão_filtrada %>%
+  filter(V20082 != 9999)
+
+#######################################  Criando base abandono ###################################################
+
+# Carregar a base base_abandono
+base_abandono <- readRDS("base_abandono")
+
+# Filtrando a base para as variáveis de interesse
+base_abandono<- base_abandono[, variaveis_interesse]
+
+# Adicionar as novas colunas na base base_evasão
+base_abandono <- base_abandono %>%
+  # Criar a coluna id_individuo
+  mutate(
+    id_individuo = paste0(UPA, "_", V1008, "_", V1014, "_", V2003, "_", V2008, "_", V20081, "_", V20082)
+  ) %>%
+  # Organizar a base pelos identificadores e trimestres
+  arrange(id_individuo, Ano, Trimestre) %>%
+  # Adicionar as outras colunas e variáveis necessárias
+  mutate(
+    faixa_idade_14_24 = ifelse(V2009 >= 14 & V2009 <= 24, 1, 0),
+    ensino_medio_dummie = ifelse(V3003A == "Regular do ensino médio", 1, 0),
+    residencia_unipessoal = ifelse(VD2004 == "Unipessoal", 1, 0),
+    rede_publica = ifelse(V3002A == "Rede pública", 1, 0),
+    
+    # Calcular RDPC (Renda Domiciliar Per Capita)
+    RD = sum(VD4020, na.rm = TRUE),          # Rendimento domiciliar total
+    V2001R = ifelse(!is.na(V2001), V2001[1], NA),  # Número de residentes no domicílio
+    RDPC = RD / V2001R,                      # Renda domiciliar per capita
+    
+    # Criar a dummy para renda per capita menor que 706
+    renda_per_capta_menor_706 = ifelse(RDPC < 706, 1, 0),
+    
+    # Adicionar a coluna de região
+    região = case_when(
+      substr(UPA, start = 1, stop = 1) == '1' ~ 'Norte',
+      substr(UPA, start = 1, stop = 1) == '2' ~ 'Nordeste',
+      substr(UPA, start = 1, stop = 1) == '3' ~ 'Sudeste',
+      substr(UPA, start = 1, stop = 1) == '4' ~ 'Sul',
+      substr(UPA, start = 1, stop = 1) == '5' ~ 'Centro-Oeste',
+      TRUE ~ NA_character_
+    ),
+    
+    # Identificar a educação da mãe e do pai
+    is_mae = (as.numeric(V2007) == 2 & (as.numeric(VD2002) %in% c(1, 2, 6))),
+    educacao_mae = ifelse(any(is_mae), VD3005[is_mae][1], NA),
+    is_pai = (as.numeric(V2007) == 1 & (as.numeric(VD2002) %in% c(1, 2, 6))),
+    educacao_pai = ifelse(any(is_pai), VD3005[is_pai][1], NA),
+    
+    # Criar a dummie de abandono: matriculado no trimestre anterior e não matriculado no trimestre atual
+    abandono = ifelse(
+      lag(V3002) == "Sim" & V3002 == "Não" & lag(Ano) == Ano,
+      1,
+      0
+    )
+  ) %>%
+  # Remover as colunas auxiliares usadas para identificar pais e mães
+  select(-is_mae, -is_pai)
+
+
+# Reorganizando as colunas para trazer as novas variáveis para o começo
+base_abandono_filtrada <- base_abandono %>%
+  dplyr::select( 
+    id_individuo,Ano, Trimestre, faixa_idade_14_24, ensino_medio_dummie, residencia_unipessoal,
+    rede_publica, renda_per_capta_menor_706, RDPC, região, educacao_mae, educacao_pai, abandono,
+    everything()
+  )
+
+## Removendo observações onde V20082 é igual a 9999
+base_abandono_filtrada<- base_evasão_filtrada %>%
+  filter(V20082 != 9999)
+
 
 ######################################## Tamanho do problema####################################################
 
+## Definindo os 3 públicos
 
-# Filtrar o público potencial (14-24 anos, RDPC < 706, VD2004 != "Unipessoal")
 
-publico_pontencial <- publico_alvo_painel_completo %>%
-  filter(  V2009 >= 14 & V2009 <= 24 &       # Faixa etária de 14 a 24 anos
-             RDPC < 706 &                      # Renda per capita menor que 706 reais
-             VD2004 != "Unipessoal" )         # Não ser residência unipessoal)
-
-# Filtrar publico EM público
-
-em_publico <- publico_alvo_painel_completo %>%
+# Público potencial (14-24 anos, RDPC < 706)
+publico_pontencial <- base_abandono_filtrada %>%
   filter(
-    V3002A == "Rede pública" &             # Somente escolas da rede pública
-      V2009 >= 14 & V2009 <= 24              # Faixa etária de 14 a 24 anos
+    V2009 >= 14 & V2009 <= 24 & RDPC < 706
   )
 
+# Público EM público (Rede pública, 14-24 anos)
+em_publico <- base_abandono_filtrada %>%
+  filter(
+    V3002A == "Rede pública" & V2009 >= 14 & V2009 <= 24
+  )
 
-# Calcular a evasão por série, público potencial
+# Público alvo PDM (Rede pública, Ensino médio regular, RDPC < 706)
+beneficiários_pdm <- base_abandono_filtrada %>%
+  filter(
+    V2009 >= 14 & V2009 <= 24 &          # Faixa etária de 14 a 24 anos
+      V3002A == "Rede pública" &           # Escola pública
+      V3003A == "Regular do ensino médio" & # Ensino médio regular
+      RDPC < 706                           # Renda per capita menor que 706 reais
+  )
 
+######################## Evasão por série ########################
+
+# Calcular a evasão por série para o público potencial
 evasao_publico_potencial <- publico_pontencial %>%
   group_by(V3006) %>%  # Agrupar por série
   summarise(
@@ -183,18 +223,16 @@ evasao_publico_potencial <- publico_pontencial %>%
     taxa_evasao = evasao_total / total_alunos  # Taxa de evasão
   )
 
-# Calcular a evasão por série, EM público
-
+# Calcular a evasão por série para o público EM público
 evasao_em_publico <- em_publico %>%
-  group_by(V3006) %>%                      # Agrupar por série
+  group_by(V3006) %>%  # Agrupar por série
   summarise(
     evasao_total = sum(evasão, na.rm = TRUE),  # Soma das evasões
     total_alunos = n(),                        # Total de alunos
     taxa_evasao = evasao_total / total_alunos  # Taxa de evasão
   )
 
-# Calcular a evasão por série, beneficiários PDM
-
+# Calcular a evasão por série para os beneficiários PDM
 evasao_publico_alvo <- beneficiários_pdm %>%
   group_by(V3006) %>%  # Agrupar por série
   summarise(
@@ -202,6 +240,7 @@ evasao_publico_alvo <- beneficiários_pdm %>%
     total_alunos = n(),                        # Total de alunos
     taxa_evasao = evasao_total / total_alunos  # Taxa de evasão
   )
+
 
 
 ############################################### Motivos da evasão###############################################
@@ -268,25 +307,29 @@ modelo_logit_publico_alvo <- feglm(
 ########## Variáveis de interesse ###########################################################################
 
 
-# região
 
-# educacao_mae , educacao_pai 
+1. #2010: Cor ou raça, #V2007: Sexo, #V2009: Idade do morador na data de referência
 
-#V1022: Situação do domicílio
+2. # região, #V1022: Situação do domicílio
 
-#V2001: Número de pessoas no domicílio
+3. # educacao_mae , educacao_pai , max educ pai/mãe, # RDPC : Rendimento domiciliar per capta
 
-#V2007: Sexo
+4 #V2001: Número de pessoas no domicílio,  #VD2004: Espécie da unidade doméstica
 
-#V2009: Idade do morador na data de referência
 
-#2010: Cor ou raça
 
-#VD2004: Espécie da unidade doméstica
+
+
+
+
+
+
+
+
 
 #VD3004: Nível de instrução mais elevado alcançado
 
-# RDPC : Rendimento domiciliar per capta
+
 
 # V3001: Sabe ler e escrever?
 
@@ -316,6 +359,7 @@ evasoes_todos_periodos <- publico_alvo_filtrado %>%
 # Verificar o número total de indivíduos que tiveram evasão em qualquer período
 numero_total_de_evasoes <- nrow(evasoes_todos_periodos)
 print(numero_total_de_evasoes)
+
 
 
 
